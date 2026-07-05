@@ -6,7 +6,6 @@ Key design principles:
 - User topic is always HumanMessage content, never string-concatenated into system
 - Every LLM call has an explicit timeout
 - Critic score parsing has guardrails with fallback to low score
-- LLM calls retry with exponential backoff on transient errors (e.g. Groq 429 rate limits)
 """
 import asyncio
 import json
@@ -17,7 +16,6 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from tools import tavily_search, scrape_urls
 
@@ -27,7 +25,7 @@ logger = logging.getLogger(__name__)
 # LLM clients — initialized lazily so tests can patch os.environ
 # --------------------------------------------------------------------------- #
 _GROQ_KEY_ENV = "GROQ_API_KEY"
-LLM_TIMEOUT = 45  # seconds — raised from 30 to give retries room to work on Render
+LLM_TIMEOUT = 30  # seconds
 
 
 def _get_large_llm() -> ChatGroq:
@@ -42,7 +40,7 @@ def _get_large_llm() -> ChatGroq:
 
 
 def _get_small_llm() -> ChatGroq:
-    """llama-3.1-8b-instant for Fact-Checker, Visualizer, Summarizer — faster & cheaper."""
+    """llama-3.1-8b-instant for Fact-Checker — faster & cheaper."""
     return ChatGroq(
         model="llama-3.1-8b-instant",
         api_key=os.environ.get(_GROQ_KEY_ENV, ""),
@@ -50,23 +48,6 @@ def _get_small_llm() -> ChatGroq:
         max_tokens=4096,
         timeout=LLM_TIMEOUT,
     )
-
-
-# --------------------------------------------------------------------------- #
-# Shared retry wrapper for all LLM invocations
-# --------------------------------------------------------------------------- #
-# Groq's free tier can return 429 (rate limit) errors when several large-model
-# calls fire in quick succession (Planner -> Writer -> Critic -> possible
-# revision -> Writer -> Critic again). This wrapper retries with exponential
-# backoff (3s, 6s, 12s, 20s) instead of letting the caller's except-block
-# silently fall back to a zeroed-out result.
-@retry(
-    stop=stop_after_attempt(4),
-    wait=wait_exponential(multiplier=1, min=3, max=20),
-    reraise=True,
-)
-def _invoke_with_retry(llm: ChatGroq, messages: list) -> Any:
-    return llm.invoke(messages)
 
 
 # --------------------------------------------------------------------------- #
@@ -109,7 +90,7 @@ def run_planner(topic: str) -> list[str]:
         HumanMessage(content=f"Research topic: {topic}"),
     ]
     try:
-        response = _invoke_with_retry(llm, messages)
+        response = llm.invoke(messages)
         raw = response.content.strip()
         # Extract JSON array from response
         match = re.search(r"\[.*?\]", raw, re.DOTALL)
@@ -127,7 +108,7 @@ def run_planner(topic: str) -> list[str]:
         lines = [l.strip().lstrip("0123456789.-) ") for l in raw.splitlines() if "?" in l]
         return lines[:5] if lines else [topic]
     except Exception as exc:
-        logger.error("Planner agent failed after retries: %s", exc)
+        logger.error("Planner agent failed: %s", exc)
         return [topic]
 
 
@@ -251,7 +232,7 @@ def run_writer(
     ))
 
     try:
-        response = _invoke_with_retry(llm, [system_msg, human_msg])
+        response = llm.invoke([system_msg, human_msg])
         report = response.content.strip()
         logger.info(
             "Writer produced report of %d chars (revision=%s, missing=%s).",
@@ -259,7 +240,7 @@ def run_writer(
         )
         return report
     except Exception as exc:
-        logger.error("Writer agent failed after retries: %s", exc)
+        logger.error("Writer agent failed: %s", exc)
         return f"# Research Report: {topic}\n\n[Report generation failed: {exc}]"
 
 
@@ -304,9 +285,7 @@ def run_critic(topic: str, report: str) -> dict[str, Any]:
     Score the report on faithfulness, completeness, and clarity (each 0-10).
     When completeness < 8, also emits a 'Missing' list of coverage angles.
     Returns {faithfulness, completeness, clarity, feedback, missing_angles}.
-    Parse errors default to 0 (triggers revision). LLM call itself retries
-    with backoff before falling back, since 429 rate-limit errors are the
-    most common real-world cause of a failed critic pass.
+    Parse errors default to 0 (triggers revision).
     """
     llm = _get_large_llm()
     angles_str = ", ".join(f'"{a}"' for a in COVERAGE_ANGLES)
@@ -331,7 +310,7 @@ def run_critic(topic: str, report: str) -> dict[str, Any]:
     ))
 
     try:
-        response = _invoke_with_retry(llm, [system_msg, human_msg])
+        response = llm.invoke([system_msg, human_msg])
         raw = response.content.strip()
         faithfulness = _parse_score(raw, "faithfulness")
         completeness = _parse_score(raw, "completeness")
@@ -356,7 +335,7 @@ def run_critic(topic: str, report: str) -> dict[str, Any]:
             "missing_angles": missing_angles,
         }
     except Exception as exc:
-        logger.error("Critic agent failed after retries: %s. Defaulting to low scores.", exc)
+        logger.error("Critic agent failed: %s. Defaulting to low scores.", exc)
         return {
             "faithfulness": 0,
             "completeness": 0,
@@ -403,12 +382,12 @@ def run_fact_checker(report: str, source_chunks: list[dict[str, str]]) -> str:
     ))
 
     try:
-        response = _invoke_with_retry(llm, [system_msg, human_msg])
+        response = llm.invoke([system_msg, human_msg])
         fact_checked = response.content.strip()
         logger.info("Fact-checker produced report of %d chars.", len(fact_checked))
         return fact_checked
     except Exception as exc:
-        logger.error("Fact-checker agent failed after retries: %s. Returning original report.", exc)
+        logger.error("Fact-checker agent failed: %s. Returning original report.", exc)
         return report  # Graceful fallback: return unmodified report
 
 
@@ -543,7 +522,7 @@ def run_visualizer(
     ))
 
     try:
-        response = _invoke_with_retry(llm, [system_msg, human_msg])
+        response = llm.invoke([system_msg, human_msg])
         raw = response.content.strip()
 
         # Extract JSON array (model may wrap in markdown fences)
@@ -573,7 +552,7 @@ def run_visualizer(
         logger.warning("Visualizer: JSON parse failed: %s. Returning empty.", exc)
         return []
     except Exception as exc:
-        logger.error("Visualizer agent failed after retries: %s. Returning empty.", exc)
+        logger.error("Visualizer agent failed: %s. Returning empty.", exc)
         return []
 
 
@@ -605,10 +584,11 @@ def run_summarizer(report: str, length: str = "brief") -> str:
     ))
 
     try:
-        response = _invoke_with_retry(llm, [system_msg, human_msg])
+        response = llm.invoke([system_msg, human_msg])
         summary = response.content.strip()
         logger.info("Summarizer produced %d chars.", len(summary))
         return summary
     except Exception as exc:
-        logger.error("Summarizer failed after retries: %s", exc)
+        logger.error("Summarizer failed: %s", exc)
         return "• Summary generation failed. Please try again."
+
