@@ -1,0 +1,35 @@
+backend/.env
+frontend/.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+node_modules/
+frontend/dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Env files (broader safety net)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Frontend build tooling
+frontend/.vite/
+frontend/.vercel/
+
+# Backend
+backend/*.db
+backend/.pytest_cache/
