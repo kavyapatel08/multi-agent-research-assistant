@@ -591,4 +591,3 @@ def run_summarizer(report: str, length: str = "brief") -> str:
     except Exception as exc:
         logger.error("Summarizer failed: %s", exc)
         return "• Summary generation failed. Please try again."
-
