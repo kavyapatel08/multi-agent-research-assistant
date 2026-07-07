@@ -150,7 +150,7 @@ class TestCriticLoopBound:
         """When critic gives high scores, writer should only be called once."""
         writer_call_count = 0
 
-        def counting_writer(topic, source_chunks, critic_feedback=""):
+        def counting_writer(topic, source_chunks, critic_feedback="", missing_angles=None):
             nonlocal writer_call_count
             writer_call_count += 1
             return WRITER_RESPONSE
@@ -168,7 +168,7 @@ class TestCriticLoopBound:
         writer_call_count = 0
         critic_call_count = 0
 
-        def counting_writer(topic, source_chunks, critic_feedback=""):
+        def counting_writer(topic, source_chunks, critic_feedback="", missing_angles=None):
             nonlocal writer_call_count
             writer_call_count += 1
             return WRITER_RESPONSE
@@ -182,6 +182,7 @@ class TestCriticLoopBound:
                 "completeness": 5,
                 "clarity": 6,
                 "feedback": "Needs more detail and citations.",
+                "missing_angles": ["expert or institutional opinions", "future outlook / predictions"],
             }
 
         with _patch_all_agents(critic_response=BAD_CRITIC_RESPONSE):
@@ -200,9 +201,13 @@ class TestCriticLoopBound:
         writer_call_count = 0
 
         def always_bad_critic(topic, report):
-            return {"faithfulness": 1, "completeness": 1, "clarity": 1, "feedback": "Always bad."}
+            return {
+                "faithfulness": 1, "completeness": 1, "clarity": 1,
+                "feedback": "Always bad.",
+                "missing_angles": ["expert or institutional opinions"],
+            }
 
-        def counting_writer(topic, source_chunks, critic_feedback=""):
+        def counting_writer(topic, source_chunks, critic_feedback="", missing_angles=None):
             nonlocal writer_call_count
             writer_call_count += 1
             return WRITER_RESPONSE
@@ -271,7 +276,8 @@ class TestShouldRevise:
 
         state = {
             "topic": "test",
-            "critic_scores": {"faithfulness": 8, "completeness": 8, "clarity": 9},
+            # completeness must be >= 8 to avoid revision (threshold raised from 7 to 8)
+            "critic_scores": {"faithfulness": 8, "completeness": 9, "clarity": 9},
             "revision_count": 0,
         }
         assert should_revise(state) == "fact_checker"
@@ -291,7 +297,8 @@ class TestShouldRevise:
 
         state = {
             "topic": "test",
-            "critic_scores": {"faithfulness": 8, "completeness": 4, "clarity": 7},
+            # completeness=7 is now below the revised threshold of 8 → triggers revision
+            "critic_scores": {"faithfulness": 8, "completeness": 7, "clarity": 7},
             "revision_count": 0,
         }
         assert should_revise(state) == "writer"
