@@ -73,7 +73,7 @@ jobs:
 
       - name: Build frontend
         env:
-          VITE_API_URL: "https://your-backend.onrender.com"
+          VITE_API_URL: "https://multi-agent-research-assistant-2exr.onrender.com/"
         run: npm run build
 
       - name: Upload build artifact
@@ -104,6 +104,9 @@ jobs:
   # ------------------------------------------------------------------ #
   # Deploy Frontend → Vercel  (only on push to main, after build passes)
   # ------------------------------------------------------------------ #
+ # ------------------------------------------------------------------ #
+  # Deploy Frontend → Vercel  (only on push to main, after build passes)
+  # ------------------------------------------------------------------ #
   deploy-frontend:
     name: Deploy Frontend (Vercel)
     runs-on: ubuntu-latest
@@ -114,17 +117,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
       - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v25
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: "--prod"
-          working-directory: ./frontend
-        # Set these 3 secrets in: GitHub repo → Settings → Secrets → Actions
-        # VERCEL_TOKEN     → vercel.com → Settings → Tokens → Create
-        # VERCEL_ORG_ID    → vercel.com → Settings → General → Team ID
-        # VERCEL_PROJECT_ID → vercel.com → your project → Settings → General → Project ID
-
-
+        working-directory: ./frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+          vercel build --prod --token=$VERCEL_TOKEN
+          vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
