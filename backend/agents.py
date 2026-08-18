@@ -318,6 +318,9 @@ def run_critic(topic: str, report: str) -> dict[str, Any]:
     selected_angles = COVERAGE_ANGLES_TECHNICAL if is_tech else COVERAGE_ANGLES_GENERAL
     angles_str = ", ".join(f'"{a}"' for a in selected_angles)
     
+    # Pre-format example list to avoid f-string backslash syntax issues on Python 3.11
+    example_missing_str = ", ".join(f'"{a}"' for a in selected_angles[:2])
+    
     system_msg = SystemMessage(content=(
         "You are a rigorous Research Critic. Evaluate the provided research report on three dimensions:\n"
         "1. Faithfulness (0-10): Are the main factual claims supported by the cited sources? "
@@ -332,7 +335,7 @@ def run_critic(topic: str, report: str) -> dict[str, Any]:
         "Clarity: <score>\n"
         "Feedback: <specific actionable feedback for the writer, or 'None' if all scores >= 8>\n"
         "Missing: <if completeness < 8, a JSON array of missing coverage angles chosen ONLY from "
-        f"[{angles_str}], e.g. [{', '.join(f'\"{a}\"' for a in selected_angles[:2])}]. "
+        f"[{angles_str}], e.g. [{example_missing_str}]. "
         "If completeness >= 8, write Missing: []>"
     ))
     human_msg = HumanMessage(content=(
