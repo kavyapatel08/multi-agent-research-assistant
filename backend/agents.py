@@ -29,9 +29,9 @@ LLM_TIMEOUT = 30  # seconds
 
 
 def _get_large_llm() -> ChatGroq:
-    """llama-3.3-70b-versatile for Planner, Writer, Critic."""
+    """openai/gpt-oss-120b for Planner, Writer, Critic (replacing deprecated Llama 3 70B)."""
     return ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         api_key=os.environ.get(_GROQ_KEY_ENV, ""),
         temperature=0.3,
         max_tokens=4096,
@@ -40,9 +40,9 @@ def _get_large_llm() -> ChatGroq:
 
 
 def _get_small_llm() -> ChatGroq:
-    """llama-3.1-8b-instant for Fact-Checker — faster & cheaper."""
+    """openai/gpt-oss-20b for Fact-Checker and Visualizer (replacing deprecated Llama 3 8B)."""
     return ChatGroq(
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-20b",
         api_key=os.environ.get(_GROQ_KEY_ENV, ""),
         temperature=0.1,
         max_tokens=4096,
@@ -54,9 +54,9 @@ def _get_small_llm() -> ChatGroq:
 # Planner Agent
 # --------------------------------------------------------------------------- #
 
-# Coverage angles that the Planner must address when relevant.
-# These are referenced by the Critic's 'missing' list and the Writer's revision instructions.
-COVERAGE_ANGLES = [
+# Coverage angles categorised by topic type.
+# This prevents technical/scientific topics from being graded on social metrics like "expert opinions".
+COVERAGE_ANGLES_GENERAL = [
     "current state / key statistics",
     "benefits / positive impacts",
     "risks / challenges",
@@ -64,21 +64,47 @@ COVERAGE_ANGLES = [
     "future outlook / predictions",
 ]
 
+COVERAGE_ANGLES_TECHNICAL = [
+    "methodology / architecture overview",
+    "datasets / input data processing",
+    "key algorithms / models used",
+    "technical challenges / limitations",
+    "practical applications / future outlook",
+]
+
+# Combined list for global definitions/fallbacks
+COVERAGE_ANGLES = COVERAGE_ANGLES_GENERAL + COVERAGE_ANGLES_TECHNICAL
+
+
+def _is_technical_topic(topic: str) -> bool:
+    """Simple heuristic to detect scientific/technical engineering topics."""
+    tech_keywords = [
+        "satellite", "learning", "deep learning", "neural", "algorithm", 
+        "architecture", "framework", "detection", "sensor", "dataset", 
+        "model", "system", "methodology", "data", "processing", "engineering",
+        "quantum", "physics", "chemistry", "biology", "scientific"
+    ]
+    topic_lower = topic.lower()
+    return any(kw in topic_lower for kw in tech_keywords)
+
 
 def run_planner(topic: str) -> list[str]:
     """
-    Split the topic into 4-5 focused sub-questions covering the required angles.
-    Always tries to include: current state, benefits, risks, expert opinions, future outlook.
-    Returns a list of sub-question strings.
+    Decompose a research topic into 4 to 5 sub-questions.
+    Dynamically switches angles based on whether the topic is Technical/Scientific or General.
     """
     llm = _get_large_llm()
-    angles_str = ", ".join(f"({i+1}) {a}" for i, a in enumerate(COVERAGE_ANGLES))
+    
+    is_tech = _is_technical_topic(topic)
+    selected_angles = COVERAGE_ANGLES_TECHNICAL if is_tech else COVERAGE_ANGLES_GENERAL
+    angles_str = ", ".join(f"({i+1}) {a}" for i, a in enumerate(selected_angles))
+
     messages = [
         SystemMessage(content=(
             "You are a Research Planner. Your task is to decompose a research topic into "
             "4 to 5 specific, non-overlapping sub-questions that give comprehensive coverage.\n\n"
-            "You MUST include sub-questions that address each of these angles wherever relevant "
-            f"to the topic: {angles_str}.\n\n"
+            f"Topic Category: {'Technical / Scientific' if is_tech else 'General / Social'}\n"
+            f"You MUST include sub-questions that address each of these angles: {angles_str}.\n\n"
             "Rules:\n"
             "1. Each sub-question must be directly answerable through web research.\n"
             "2. Questions must not overlap — each should cover a distinct angle.\n"
@@ -288,21 +314,25 @@ def run_critic(topic: str, report: str) -> dict[str, Any]:
     Parse errors default to 0 (triggers revision).
     """
     llm = _get_large_llm()
-    angles_str = ", ".join(f'"{a}"' for a in COVERAGE_ANGLES)
+    is_tech = _is_technical_topic(topic)
+    selected_angles = COVERAGE_ANGLES_TECHNICAL if is_tech else COVERAGE_ANGLES_GENERAL
+    angles_str = ", ".join(f'"{a}"' for a in selected_angles)
+    
     system_msg = SystemMessage(content=(
         "You are a rigorous Research Critic. Evaluate the provided research report on three dimensions:\n"
-        "1. Faithfulness (0-10): Are all claims supported by cited sources? No hallucinations?\n"
-        "2. Completeness (0-10): Does the report thoroughly cover the topic, including: "
-        "current state/statistics, benefits, risks/challenges, expert or institutional opinions, "
-        "and future outlook?\n"
+        "1. Faithfulness (0-10): Are the main factual claims supported by the cited sources? "
+        "Do NOT penalize standard summarization or minor paraphrasing. Only deduct points (score < 8) "
+        "if the report directly contradicts the source or invents figures/facts not present in the sources.\n"
+        "2. Completeness (0-10): Does the report thoroughly cover the topic?\n"
+        f"   For this {'Technical' if is_tech else 'General'} topic, it MUST cover: {angles_str}\n"
         "3. Clarity (0-10): Is the report well-structured and easy to understand?\n\n"
-        "Respond in EXACTLY this format (integers only for scores):\n"
+        "Respond in EXACTLY this format (integers only for scores, no extra labels or markdown wrapper):\n"
         "Faithfulness: <score>\n"
         "Completeness: <score>\n"
         "Clarity: <score>\n"
         "Feedback: <specific actionable feedback for the writer, or 'None' if all scores >= 8>\n"
         "Missing: <if completeness < 8, a JSON array of missing coverage angles chosen ONLY from "
-        f"[{angles_str}], e.g. [\"expert or institutional opinions\", \"future outlook / predictions\"]. "
+        f"[{angles_str}], e.g. [{', '.join(f'\"{a}\"' for a in selected_angles[:2])}]. "
         "If completeness >= 8, write Missing: []>"
     ))
     human_msg = HumanMessage(content=(
